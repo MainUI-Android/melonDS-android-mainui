@@ -45,6 +45,13 @@ class MelonStates(
 
     override fun slotCount() = SLOTS
 
+    override fun pause(): Boolean {
+        runBlocking { emulator.pauseEmulator() }
+        return true
+    }
+
+    override fun resume() = runBlocking { emulator.resumeEmulator() }
+
     override fun save(slot: Int): String = runBlocking {
         val rom = rom() ?: throw IllegalStateException("no game is running")
         whilePaused {
