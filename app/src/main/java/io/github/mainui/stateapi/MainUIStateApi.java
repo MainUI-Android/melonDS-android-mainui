@@ -10,8 +10,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * MainUI State API, version 1: lets MainUI (an Android frontend) save and load states in this
- * emulator directly, instead of pressing hotkeys it may not have.
+ * MainUI State API, version 2: lets MainUI (an Android frontend) save and load states in this
+ * emulator directly, instead of pressing hotkeys it may not have, and pause the game behind its
+ * menu the way the emulator's own menu does (version 2), instead of freezing the app (which can
+ * leave it without sound).
  *
  * <p>MainUI sends an explicit broadcast {@link #ACTION_COMMAND} to this app with
  * {@link #EXTRA_COMMAND} "save", "load" or "status", a {@link #EXTRA_SLOT} (0-based; {@link
@@ -31,7 +33,7 @@ import java.util.concurrent.Executors;
  * <p>This file is the same in every emulator; only the {@link Emulator} adapter differs.
  */
 public final class MainUIStateApi {
-    public static final int VERSION = 1;
+    public static final int VERSION = 2;
     private static final String TAG = "MainUIStateApi";
 
     public static final String ACTION_COMMAND = "io.github.mainui.stateapi.COMMAND";
@@ -91,6 +93,15 @@ public final class MainUIStateApi {
 
         /** When [slot] (or {@link #RESUME_SLOT}) was saved, ms since 1970; 0 when it is empty. */
         long slotTime(int slot);
+
+        /**
+         * Pauses the game the way the emulator pauses for its own menu (sound included): MainUI's
+         * menu is open over it. False when it can't (MainUI then freezes the app).
+         */
+        default boolean pause() { return false; }
+
+        /** Lets the game run again after {@link #pause}. */
+        default void resume() {}
     }
 
     private static volatile Emulator emulator;
@@ -98,6 +109,12 @@ public final class MainUIStateApi {
     private static volatile long attachedAt;
     private static final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "mainui-state-api");
+        t.setDaemon(true);
+        return t;
+    });
+    /** Pause and resume: at once, not behind a save or load that is still waiting for the game. */
+    private static final ExecutorService control = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "mainui-state-api-control");
         t.setDaemon(true);
         return t;
     });
@@ -165,12 +182,27 @@ public final class MainUIStateApi {
         final long waitMs = intent.getLongExtra(EXTRA_WAIT_MS, 15_000);
         final long settleMs = intent.getLongExtra(EXTRA_SETTLE_MS, 300);
         final long notBefore = intent.getLongExtra(EXTRA_NOT_BEFORE, 0);
+        if ("pause".equals(command) || "resume".equals(command)) {
+            control.execute(() -> {
+                Intent r = result(command, slot, request);
+                try {
+                    Emulator e = emulator;
+                    if (e == null || !e.isRunning()) throw new IllegalStateException("no game is running");
+                    if ("pause".equals(command)) {
+                        if (!e.pause()) throw new IllegalStateException("can't pause");
+                    } else {
+                        e.resume();
+                    }
+                    r.putExtra(EXTRA_OK, true);
+                } catch (Throwable t) {
+                    fail(r, t);
+                }
+                answer(ctx, replyTo, r);
+            });
+            return;
+        }
         worker.execute(() -> {
-            Intent r = new Intent(ACTION_RESULT);
-            r.putExtra(EXTRA_COMMAND, command);
-            r.putExtra(EXTRA_SLOT, slot);
-            r.putExtra(EXTRA_REQUEST, request);
-            r.putExtra(EXTRA_VERSION, VERSION);
+            Intent r = result(command, slot, request);
             try {
                 Emulator e = emulator;
                 if ("status".equals(command)) {
@@ -191,17 +223,33 @@ public final class MainUIStateApi {
                     throw new IllegalArgumentException("unknown command " + command);
                 }
             } catch (Throwable t) {
-                Log.w(TAG, command + " " + slot + " failed", t);
-                r.putExtra(EXTRA_OK, false);
-                r.putExtra(EXTRA_ERROR, t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName());
+                fail(r, t);
             }
-            if (replyTo != null) {
-                r.setPackage(replyTo);
-                // The foreground queue: the background one can hold a broadcast for seconds.
-                r.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
-                ctx.sendBroadcast(r);
-            }
+            answer(ctx, replyTo, r);
         });
+    }
+
+    private static Intent result(String command, int slot, String request) {
+        Intent r = new Intent(ACTION_RESULT);
+        r.putExtra(EXTRA_COMMAND, command);
+        r.putExtra(EXTRA_SLOT, slot);
+        r.putExtra(EXTRA_REQUEST, request);
+        r.putExtra(EXTRA_VERSION, VERSION);
+        return r;
+    }
+
+    private static void fail(Intent r, Throwable t) {
+        Log.w(TAG, r.getStringExtra(EXTRA_COMMAND) + " " + r.getIntExtra(EXTRA_SLOT, 0) + " failed", t);
+        r.putExtra(EXTRA_OK, false);
+        r.putExtra(EXTRA_ERROR, t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName());
+    }
+
+    private static void answer(Context ctx, String replyTo, Intent r) {
+        if (replyTo == null) return;
+        r.setPackage(replyTo);
+        // The foreground queue: the background one can hold a broadcast for seconds.
+        r.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
+        ctx.sendBroadcast(r);
     }
 
     private static void status(Intent r, Emulator e) {

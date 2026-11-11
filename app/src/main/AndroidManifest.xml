@@ -40,7 +40,7 @@
         android:theme="@style/AppTheme">
 
         <!-- MainUI State API: MainUI (a frontend) saves and loads states with broadcasts. -->
-        <meta-data android:name="io.github.mainui.STATE_API" android:value="1" />
+        <meta-data android:name="io.github.mainui.STATE_API" android:value="2" />
         <receiver
             android:name="io.github.mainui.stateapi.MainUIStateApi$Receiver"
             android:exported="true"
