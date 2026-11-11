@@ -65,9 +65,11 @@ case "$cmd" in
     ;;
 
   stable-tag)
-    # Upstream's latest release (GitHub release, else the newest tag matching STABLE_TAG_REGEX),
+    # Upstream's latest release (its newest published GitHub release whose tag matches
+    # STABLE_TAG_REGEX: not another platform's; else, with no releases, the newest matching tag),
     # when we have no "<tag>-mainui" release of it yet; empty otherwise.
-    tag=$(gh api "repos/$UPSTREAM_REPO/releases/latest" --jq .tag_name 2>/dev/null || true)
+    tag=$(gh api "repos/$UPSTREAM_REPO/releases?per_page=50" --jq '.[] | select((.draft or .prerelease) | not) | .tag_name' 2>/dev/null \
+      | grep -E "${STABLE_TAG_REGEX:-.}" | head -1 || true)
     if [ -z "$tag" ] && [ -n "${STABLE_TAG_REGEX:-}" ]; then
       tag=$(git ls-remote --tags --refs "https://github.com/$UPSTREAM_REPO.git" | sed 's#.*refs/tags/##' \
         | grep -E "$STABLE_TAG_REGEX" | sort -V | tail -1 || true)
