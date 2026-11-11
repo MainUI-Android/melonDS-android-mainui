@@ -28,6 +28,10 @@ class GitHubProdUpdatesRepository(private val context: Context, private val api:
     }
 
     override suspend fun checkNewUpdate(): Result<AppUpdate?> {
+        // MainUI-Android build: MainUI updates it from MainUI-Android's releases, not this.
+        if (context.packageName.endsWith(".mainui")) {
+            return Result.success(null)
+        }
         if (!shouldCheckUpdates()) {
             return Result.success(null)
         }
