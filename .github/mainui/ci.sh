@@ -33,9 +33,6 @@ problem() {
   gh issue create --title "$title" --body "$body" >/dev/null 2>&1 || true
 }
 
-# The patch: commits on our branch that upstream doesn't have, merges left out.
-patch_commits() { git rev-list --reverse --no-merges "upstream/$UPSTREAM_BRANCH..HEAD"; }
-
 cmd="${1:-}"; shift || true
 case "$cmd" in
   sync)
@@ -80,21 +77,23 @@ case "$cmd" in
     ;;
 
   prepare-stable)
-    # Checks out upstream release $1 with the patch commits on top (branch mainui-stable).
+    # Checks out upstream release $1 with the patch on top (branch mainui-stable): the patch's net
+    # change (this branch against the upstream commit it last merged), applied in one 3-way step,
+    # so the patch's history (lines moved, edits undone) doesn't matter.
     tag="${1:?tag}"
     ensure_upstream
     git fetch --quiet upstream "refs/tags/$tag:refs/tags/$tag"
-    commits=$(patch_commits)
+    base=$(git merge-base "upstream/$UPSTREAM_BRANCH" HEAD)
+    patch="${RUNNER_TEMP:-/tmp}/mainui.patch"
+    git diff --binary "$base" HEAD > "$patch"
     git checkout --quiet -B mainui-stable "$tag"
-    for c in $commits; do
-      if ! git cherry-pick -x "$c" >/dev/null; then
-        git cherry-pick --abort || true
-        problem "Patch doesn't apply to $tag" "Cherry-picking $(git log -1 --format='%h %s' "$c") onto $UPSTREAM_REPO $tag conflicts. The nightly maintenance session adapts it; no stable build until then."
-        exit 1
-      fi
-    done
+    if ! git apply --3way --index "$patch"; then
+      problem "Patch doesn't apply to $tag" "The MainUI patch (this branch against upstream $(git rev-parse --short "$base")) conflicts with $UPSTREAM_REPO $tag in: $(git diff --name-only --diff-filter=U | tr '\n' ' '). The nightly maintenance session adapts it; no stable build until then."
+      exit 1
+    fi
+    git commit --quiet -m "MainUI patch on $tag"
     git submodule update --init --recursive --quiet || true
-    say "mainui-stable: $tag + $(echo "$commits" | grep -c . || true) patch commits"
+    say "mainui-stable: $tag + the MainUI patch ($(git diff --shortstat "$tag" HEAD))"
     ;;
 
   version)
@@ -130,13 +129,17 @@ case "$cmd" in
     channel="${1:?channel}"; tag="${2:-}"; shift 2 || shift $#
     sha=$(git rev-parse HEAD)
     if [ "$channel" = stable ]; then
-      # (Its commit exists only here: a tag takes it to GitHub.)
-      git tag -f "$tag-mainui" "$sha"
-      git push --quiet -f origin "refs/tags/$tag-mainui"
-      gh release create "$tag-mainui" --verify-tag --latest \
-        --title "$tag (MainUI)" \
-        --notes "$UPSTREAM_REPO $tag with the MainUI State API (save / load states and slots driven by MainUI). Installs beside the official app." \
-        "$@"
+      # The APK is $tag with the patch commits on top: a commit only this runner has, which the
+      # workflow's token may not push (it changes workflow files). So the release's tag goes on
+      # upstream's $tag commit (on this fork's branch once it has merged it), and the notes name
+      # the patch.
+      patch=$(git rev-parse --short "origin/$UPSTREAM_BRANCH")
+      notes="$UPSTREAM_REPO $tag with the MainUI State API (save / load states and slots driven by MainUI), the patch as of $patch. Installs beside the official app."
+      target=$(git rev-parse "$tag^{commit}")
+      if ! gh release create "$tag-mainui" --target "$target" --latest --title "$tag (MainUI)" --notes "$notes" "$@"; then
+        gh release create "$tag-mainui" --target "$(git rev-parse "origin/$UPSTREAM_BRANCH")" --latest \
+          --title "$tag (MainUI)" --notes "$notes" "$@"
+      fi
     else
       gh release delete nightly --yes --cleanup-tag >/dev/null 2>&1 || true
       git push --quiet origin ":refs/tags/nightly" 2>/dev/null || true
