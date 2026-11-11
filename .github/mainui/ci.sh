@@ -15,6 +15,8 @@ set -euo pipefail
 : "${UPSTREAM_REPO:?}"
 UPSTREAM_BRANCH="${UPSTREAM_BRANCH:-master}"
 OUT="${GITHUB_OUTPUT:-/dev/stdout}"
+# gh acts on this fork whatever remotes a step adds (it would pick "upstream" over "origin").
+if [ -n "${GITHUB_REPOSITORY:-}" ]; then export GH_REPO="$GITHUB_REPOSITORY"; fi
 
 say() { echo "$@" >&2; }
 
