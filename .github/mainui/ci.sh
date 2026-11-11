@@ -3,8 +3,9 @@
 #
 # The fork's default branch is upstream plus MainUI's patch commits. Every night it merges
 # upstream; "nightly" releases are built from it. "Stable" releases are upstream's latest release
-# with the patch commits on top, built once per upstream release, so MainUI (which follows a
-# repository's latest non-prerelease release) gets a new stable build whenever upstream ships one.
+# with the patch on top, built once per upstream release and patch, so MainUI (which follows a
+# repository's latest non-prerelease release) gets a new stable build whenever upstream ships one
+# or the patch changes.
 #
 # Environment: UPSTREAM_REPO (owner/name), UPSTREAM_BRANCH (default master), STABLE_TAG_REGEX
 # (tags that count as upstream releases when it has no GitHub releases), GH_TOKEN, and for signing
@@ -22,6 +23,14 @@ ensure_upstream() {
   git config user.email >/dev/null 2>&1 || git config user.email "mainui-ci@users.noreply.github.com"
   git remote get-url upstream >/dev/null 2>&1 || git remote add upstream "https://github.com/$UPSTREAM_REPO.git"
   git fetch --no-tags --quiet upstream "$UPSTREAM_BRANCH"
+}
+
+# The patch's fingerprint at $1: its changed lines without context or CI files, so merging
+# upstream changes it only where a line the patch touches changed.
+patch_id() {
+  ensure_upstream
+  git diff -U0 "$(git merge-base "upstream/$UPSTREAM_BRANCH" "$1")" "$1" -- . ':(exclude).github' \
+    | git patch-id --stable | cut -c1-12
 }
 
 # Something needs a person (or the nightly Claude session): an issue when the fork has them, and
@@ -64,14 +73,17 @@ case "$cmd" in
   stable-tag)
     # Upstream's latest release (its newest published GitHub release whose tag matches
     # STABLE_TAG_REGEX: not another platform's; else, with no releases, the newest matching tag),
-    # when we have no "<tag>-mainui" release of it yet; empty otherwise.
+    # unless its "<tag>-mainui" release has this patch already; empty otherwise.
     tag=$(gh api "repos/$UPSTREAM_REPO/releases?per_page=50" --jq '.[] | select((.draft or .prerelease) | not) | .tag_name' 2>/dev/null \
       | grep -E "${STABLE_TAG_REGEX:-.}" | head -1 || true)
     if [ -z "$tag" ] && [ -n "${STABLE_TAG_REGEX:-}" ]; then
       tag=$(git ls-remote --tags --refs "https://github.com/$UPSTREAM_REPO.git" | sed 's#.*refs/tags/##' \
         | grep -E "$STABLE_TAG_REGEX" | sort -V | tail -1 || true)
     fi
-    if [ -n "$tag" ] && gh release view "$tag-mainui" >/dev/null 2>&1; then tag=""; fi
+    if [ -n "$tag" ]; then
+      built=$(gh release view "$tag-mainui" --json body --jq .body 2>/dev/null || true)
+      case "$built" in *"MainUI patch $(patch_id HEAD)."*) tag="" ;; esac
+    fi
     say "Stable to build: ${tag:-none}"
     echo "tag=$tag" >> "$OUT"
     ;;
@@ -132,9 +144,11 @@ case "$cmd" in
       # The APK is $tag with the patch commits on top: a commit only this runner has, which the
       # workflow's token may not push (it changes workflow files). So the release's tag goes on
       # upstream's $tag commit (on this fork's branch once it has merged it), and the notes name
-      # the patch.
-      patch=$(git rev-parse --short "origin/$UPSTREAM_BRANCH")
-      notes="$UPSTREAM_REPO $tag with the MainUI State API (save / load states and slots driven by MainUI), the patch as of $patch. Installs beside the official app."
+      # the patch (stable-tag reads it back).
+      notes="$UPSTREAM_REPO $tag with the MainUI State API (save / load states and slots driven by MainUI), MainUI patch $(patch_id "origin/$UPSTREAM_BRANCH"). Installs beside the official app."
+      # Built again for a new patch: it replaces the release before.
+      gh release delete "$tag-mainui" --yes --cleanup-tag >/dev/null 2>&1 || true
+      git push --quiet origin ":refs/tags/$tag-mainui" 2>/dev/null || true
       target=$(git rev-parse "$tag^{commit}")
       if ! gh release create "$tag-mainui" --target "$target" --latest --title "$tag (MainUI)" --notes "$notes" "$@"; then
         gh release create "$tag-mainui" --target "$(git rev-parse "origin/$UPSTREAM_BRANCH")" --latest \
