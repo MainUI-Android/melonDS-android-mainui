@@ -1,5 +1,6 @@
 package me.magnum.melonds.impl.emulator
 
+import io.github.mainui.stateapi.MelonStates
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
@@ -165,10 +166,12 @@ class AndroidEmulatorManager(
 
     override suspend fun pauseEmulator() {
         MelonEmulator.pauseEmulation()
+        MelonStates.paused = true
     }
 
     override suspend fun resumeEmulator() {
         MelonEmulator.resumeEmulation()
+        MelonStates.paused = false
     }
 
     override suspend fun resetEmulator() {

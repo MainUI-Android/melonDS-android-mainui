@@ -70,6 +70,9 @@ import me.magnum.melonds.domain.repositories.SaveStatesRepository
 import me.magnum.melonds.domain.repositories.SettingsRepository
 import me.magnum.melonds.domain.services.EmulatorManager
 import me.magnum.melonds.impl.emulator.EmulatorSession
+import me.magnum.melonds.common.uridelegates.UriHandler
+import io.github.mainui.stateapi.MainUIStateApi
+import io.github.mainui.stateapi.MelonStates
 import me.magnum.melonds.impl.layout.UILayoutProvider
 import me.magnum.melonds.ui.emulator.component.RetroAchievementsSubmissionHandler
 import me.magnum.melonds.ui.emulator.firmware.FirmwarePauseMenuOption
@@ -113,6 +116,7 @@ class EmulatorViewModel @Inject constructor(
     private val emulatorManager: EmulatorManager,
     private val emulatorSession: EmulatorSession,
     private val retroAchievementsSubmissionHandler: RetroAchievementsSubmissionHandler,
+    private val uriHandler: UriHandler,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -121,6 +125,19 @@ class EmulatorViewModel @Inject constructor(
 
     private val _emulatorState = MutableStateFlow<EmulatorState>(EmulatorState.Uninitialized)
     val emulatorState = _emulatorState.asStateFlow()
+
+    // MainUI State API: MainUI (a frontend) saves and loads this game's states with broadcasts.
+    private val mainUiStates = MelonStates(
+        rom = { (_emulatorState.value as? EmulatorState.RunningRom)?.rom },
+        loadsAllowed = { emulatorSession.areSaveStateLoadsAllowed() },
+        emulator = emulatorManager,
+        saveStates = saveStatesRepository,
+        settings = settingsRepository,
+        uris = uriHandler,
+        saveSlot = { rom, slot -> saveRomState(rom, slot) },
+        loadSlot = { rom, slot -> loadRomState(rom, slot) },
+        afterLoad = { _achievementsEvent.emit(RAEventUi.Reset) },
+    )
 
     private val _layout = MutableStateFlow<LayoutConfiguration?>(null)
 
@@ -265,6 +282,7 @@ class EmulatorViewModel @Inject constructor(
                     _toastEvent.tryEmit(ToastEvent.GbaLoadFailed)
                 }
                 _emulatorState.value = EmulatorState.RunningRom(rom)
+                MainUIStateApi.attach(mainUiStates)
                 startTrackingFps()
                 startTrackingPlayTime(rom)
             }
@@ -1041,6 +1059,7 @@ class EmulatorViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
+        MainUIStateApi.detach(mainUiStates)
         sessionCoroutineScope.cancel()
         emulatorManager.cleanEmulator()
     }
