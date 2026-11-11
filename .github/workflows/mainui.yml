@@ -10,7 +10,9 @@ on:
     branches: [master]
     paths-ignore: ['**.md']
   schedule:
-    - cron: '0 8 * * *'
+    # 02:00 PST: after the nightly maintenance session (00:00 PST), which merges upstream and fixes
+    # what doesn't merge; this merges again if it hasn't, and builds what isn't built yet.
+    - cron: '0 10 * * *'
   workflow_dispatch:
 
 permissions:
@@ -51,11 +53,15 @@ jobs:
       - name: Plan
         id: plan
         run: |
-          if [ -n "${{ steps.stable.outputs.tag }}" ]; then echo 'channels=["nightly","stable"]' >> "$GITHUB_OUTPUT"
-          else echo 'channels=["nightly"]' >> "$GITHUB_OUTPUT"; fi
+          # Nightly: unless this is the schedule and "nightly" is this commit's build already.
+          c=()
+          if [ "${{ github.event_name }}" != schedule ] || [ "$(git ls-remote origin refs/tags/nightly | cut -f1)" != "$(git rev-parse HEAD)" ]; then c+=('"nightly"'); fi
+          if [ -n "${{ steps.stable.outputs.tag }}" ]; then c+=('"stable"'); fi
+          echo "channels=[$(IFS=,; echo "${c[*]}")]" >> "$GITHUB_OUTPUT"
 
   build:
     needs: plan
+    if: needs.plan.outputs.channels != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
