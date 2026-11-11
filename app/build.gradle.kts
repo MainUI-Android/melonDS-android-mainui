@@ -30,10 +30,12 @@ android {
     ndkVersion = AppConfig.ndkVersion
     defaultConfig {
         applicationId = "me.magnum.melonds"
+        // MainUI-Android build: installs beside the official app (CI sets the version).
+        applicationIdSuffix = ".mainui"
         minSdk = AppConfig.minSdkVersion
         targetSdk = AppConfig.targetSdkVersion
-        versionCode = AppConfig.versionCode
-        versionName = AppConfig.versionName
+        versionCode = System.getenv("MAINUI_VERSION_CODE")?.toIntOrNull() ?: AppConfig.versionCode
+        versionName = System.getenv("MAINUI_VERSION_NAME") ?: AppConfig.versionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters.addAll(listOf("arm64-v8a", "x86_64"))
@@ -53,7 +55,8 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("release")
+            // (Unsigned without a keystore: MainUI-Android's CI signs the APK itself.)
+            signingConfig = signingConfigs.getByName("release").takeIf { it.storeFile != null }
         }
         getByName("debug") {
             applicationIdSuffix = ".dev"

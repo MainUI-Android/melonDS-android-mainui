@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- MainUI-Android build: told apart from the official app. -->
+    <string name="app_name">melonDS (MainUI)</string>
+</resources>

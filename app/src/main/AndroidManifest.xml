@@ -39,6 +39,17 @@
         android:isGame="true"
         android:theme="@style/AppTheme">
 
+        <!-- MainUI State API: MainUI (a frontend) saves and loads states with broadcasts. -->
+        <meta-data android:name="io.github.mainui.STATE_API" android:value="1" />
+        <receiver
+            android:name="io.github.mainui.stateapi.MainUIStateApi$Receiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver">
+            <intent-filter>
+                <action android:name="io.github.mainui.stateapi.COMMAND" />
+            </intent-filter>
+        </receiver>
+
         <meta-data
             android:name="android.game_mode_config"
             android:resource="@xml/game_mode_config" />
