@@ -197,6 +197,8 @@ public final class MainUIStateApi {
             }
             if (replyTo != null) {
                 r.setPackage(replyTo);
+                // The foreground queue: the background one can hold a broadcast for seconds.
+                r.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
                 ctx.sendBroadcast(r);
             }
         });
