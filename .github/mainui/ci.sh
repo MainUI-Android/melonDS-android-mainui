@@ -93,16 +93,26 @@ case "$cmd" in
   prepare-stable)
     # Checks out upstream release $1 with the patch on top (branch mainui-stable): the patch's net
     # change (this branch against the upstream commit it last merged), applied in one 3-way step,
-    # so the patch's history (lines moved, edits undone) doesn't matter.
+    # so the patch's history (lines moved, edits undone) doesn't matter. A release whose code the
+    # patch doesn't fit (upstream changed those lines since) has one of its own,
+    # .github/mainui/stable/<tag>.patch: the patch outside .github, its conflicts resolved on that
+    # tag. The CI files always come from this branch.
     tag="${1:?tag}"
     ensure_upstream
     git fetch --quiet upstream "refs/tags/$tag:refs/tags/$tag"
     base=$(git merge-base "upstream/$UPSTREAM_BRANCH" HEAD)
-    patch="${RUNNER_TEMP:-/tmp}/mainui.patch"
-    git diff --binary "$base" HEAD > "$patch"
+    tmp="${RUNNER_TEMP:-/tmp}"
+    git diff --binary "$base" HEAD -- .github > "$tmp/mainui-ci.patch"
+    own=".github/mainui/stable/$tag.patch"
+    if [ -f "$own" ]; then
+      cp "$own" "$tmp/mainui.patch"; from="$own"
+    else
+      git diff --binary "$base" HEAD -- . ':(exclude).github' > "$tmp/mainui.patch"
+      from="this branch against upstream $(git rev-parse --short "$base")"
+    fi
     git checkout --quiet -B mainui-stable "$tag"
-    if ! git apply --3way --index "$patch"; then
-      problem "Patch doesn't apply to $tag" "The MainUI patch (this branch against upstream $(git rev-parse --short "$base")) conflicts with $UPSTREAM_REPO $tag in: $(git diff --name-only --diff-filter=U | tr '\n' ' '). The nightly maintenance session adapts it; no stable build until then."
+    if ! git apply --3way --index "$tmp/mainui-ci.patch" || ! git apply --3way --index "$tmp/mainui.patch"; then
+      problem "Patch doesn't apply to $tag" "The MainUI patch ($from) conflicts with $UPSTREAM_REPO $tag in: $(git diff --name-only --diff-filter=U | tr '\n' ' '). The nightly maintenance session writes $own for it; no stable build until then."
       exit 1
     fi
     git commit --quiet -m "MainUI patch on $tag"
