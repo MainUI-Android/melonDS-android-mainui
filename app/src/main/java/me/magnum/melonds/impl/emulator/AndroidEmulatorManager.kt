@@ -218,6 +218,7 @@ class AndroidEmulatorManager(
 
     override fun stopEmulator() {
         MelonEmulator.stopEmulation()
+        MelonStates.paused = false
         cameraManager.stopCurrentCameraSource()
         messageQueue.stop()
     }
@@ -237,6 +238,8 @@ class AndroidEmulatorManager(
             dsiCameraSource = cameraManager,
             screenshotBuffer = screenshotFrameBufferProvider.frameBuffer(),
         )
+        // (Not paused, as the emulator itself is after its setup.)
+        MelonStates.paused = false
     }
 
     private suspend fun getRomEmulatorConfiguration(rom: Rom): EmulatorConfiguration {

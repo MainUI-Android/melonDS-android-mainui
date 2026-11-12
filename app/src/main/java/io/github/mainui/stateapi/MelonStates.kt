@@ -45,12 +45,22 @@ class MelonStates(
 
     override fun slotCount() = SLOTS
 
+    /** MainUI's pause took effect (not one the pause menu or a dialog holds). */
+    @Volatile private var pausedByMainUi = false
+
     override fun pause(): Boolean {
-        runBlocking { emulator.pauseEmulator() }
+        if (!paused) {
+            runBlocking { emulator.pauseEmulator() }
+            pausedByMainUi = true
+        }
         return true
     }
 
-    override fun resume() = runBlocking { emulator.resumeEmulator() }
+    override fun resume() {
+        if (!pausedByMainUi) return
+        pausedByMainUi = false
+        runBlocking { emulator.resumeEmulator() }
+    }
 
     override fun save(slot: Int): String = runBlocking {
         val rom = rom() ?: throw IllegalStateException("no game is running")
@@ -91,13 +101,14 @@ class MelonStates(
         }
     }
 
-    /** Runs [block] with emulation paused, like the pause menu does (the game was running: it runs again after). */
+    /** Runs [block] with emulation paused, like the pause menu does (running again after, if it was running). */
     private suspend fun <T> whilePaused(block: suspend () -> T): T {
+        val was = paused
         emulator.pauseEmulator()
         try {
             return block()
         } finally {
-            emulator.resumeEmulator()
+            if (!was) emulator.resumeEmulator()
         }
     }
 

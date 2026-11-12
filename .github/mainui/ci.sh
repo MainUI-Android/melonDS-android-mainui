@@ -35,6 +35,15 @@ patch_id() {
     | git patch-id --stable | cut -c1-12
 }
 
+# What a stable build of upstream tag $2 is made from, at $1: the patch, and the tag's own patch
+# file when it has one (a new one is built again).
+fingerprint() {
+  local id own
+  id=$(patch_id "$1")
+  own=$(git rev-parse --quiet --verify "$1:.github/mainui/stable/$2.patch" 2>/dev/null | cut -c1-8 || true)
+  echo "$id${own:+-$own}"
+}
+
 # Something needs a person (or the nightly Claude session): an issue when the fork has them, and
 # always an error in the run's log.
 problem() {
@@ -58,7 +67,11 @@ case "$cmd" in
       problem "Upstream merge conflict" "Merging $UPSTREAM_REPO $UPSTREAM_BRANCH into $(git rev-parse --abbrev-ref HEAD) conflicts in: $files. The nightly maintenance session resolves it; until then builds stay on the last merge."
       echo "changed=false" >> "$OUT"; exit 0
     fi
-    git push origin "HEAD:$(git rev-parse --abbrev-ref HEAD)"
+    if ! git push origin "HEAD:$(git rev-parse --abbrev-ref HEAD)"; then
+      git reset --quiet --hard ORIG_HEAD
+      problem "Upstream merge can't be pushed" "Merging $UPSTREAM_REPO $UPSTREAM_BRANCH went cleanly, but the push was refused (when upstream changed .github/workflows, the workflow's token may not push it). The nightly maintenance session merges it; until then builds stay on the last merge."
+      echo "changed=false" >> "$OUT"; exit 0
+    fi
     echo "changed=true" >> "$OUT"
     ;;
 
@@ -84,7 +97,7 @@ case "$cmd" in
     fi
     if [ -n "$tag" ]; then
       built=$(gh release view "$tag-mainui" --json body --jq .body 2>/dev/null || true)
-      case "$built" in *"MainUI patch $(patch_id HEAD)."*) tag="" ;; esac
+      case "$built" in *"MainUI patch $(fingerprint HEAD "$tag")."*) tag="" ;; esac
     fi
     say "Stable to build: ${tag:-none}"
     echo "tag=$tag" >> "$OUT"
@@ -96,7 +109,8 @@ case "$cmd" in
     # so the patch's history (lines moved, edits undone) doesn't matter. A release whose code the
     # patch doesn't fit (upstream changed those lines since) has one of its own,
     # .github/mainui/stable/<tag>.patch: the patch outside .github, its conflicts resolved on that
-    # tag. The CI files always come from this branch.
+    # tag, whose first line names the patch it was made from ("MainUI patch <patch_id>"). The CI
+    # files always come from this branch.
     tag="${1:?tag}"
     ensure_upstream
     git fetch --quiet upstream "refs/tags/$tag:refs/tags/$tag"
@@ -105,6 +119,12 @@ case "$cmd" in
     git diff --binary "$base" HEAD -- .github > "$tmp/mainui-ci.patch"
     own=".github/mainui/stable/$tag.patch"
     if [ -f "$own" ]; then
+      # Made from an older patch: building it would ship the old code as the new.
+      want="MainUI patch $(patch_id HEAD)"
+      if [ "$(head -1 "$own")" != "$want" ]; then
+        problem "Patch for $tag is out of date" "$own was made from another version of the MainUI patch. The nightly maintenance session makes it again from this branch's patch, first line: $want. No stable build until then."
+        exit 1
+      fi
       cp "$own" "$tmp/mainui.patch"; from="$own"
     else
       git diff --binary "$base" HEAD -- . ':(exclude).github' > "$tmp/mainui.patch"
@@ -157,7 +177,7 @@ case "$cmd" in
       # workflow's token may not push (it changes workflow files). So the release's tag goes on
       # upstream's $tag commit (on this fork's branch once it has merged it), and the notes name
       # the patch (stable-tag reads it back).
-      notes="$UPSTREAM_REPO $tag with the MainUI State API (save / load states and slots driven by MainUI), MainUI patch $(patch_id "origin/$UPSTREAM_BRANCH"). Installs beside the official app."
+      notes="$UPSTREAM_REPO $tag with the MainUI State API (save / load states and slots driven by MainUI), MainUI patch $(fingerprint "origin/$UPSTREAM_BRANCH" "$tag"). Installs beside the official app."
       # Built again for a new patch: it replaces the release before.
       gh release delete "$tag-mainui" --yes --cleanup-tag >/dev/null 2>&1 || true
       git push --quiet origin ":refs/tags/$tag-mainui" 2>/dev/null || true
