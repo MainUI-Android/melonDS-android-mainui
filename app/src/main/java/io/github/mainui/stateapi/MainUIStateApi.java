@@ -107,6 +107,8 @@ public final class MainUIStateApi {
     private static volatile Emulator emulator;
     /** When [emulator] was attached ({@link SystemClock#uptimeMillis}). */
     private static volatile long attachedAt;
+    /** MainUI's menu holds the game paused (between its pause and its resume). */
+    private static volatile boolean mainUiPaused;
     private static final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "mainui-state-api");
         t.setDaemon(true);
@@ -122,7 +124,7 @@ public final class MainUIStateApi {
     private MainUIStateApi() {}
 
     /** A game's emulator is up (call again for each new game): commands go to [e] from now on. */
-    public static void attach(Emulator e) { attachedAt = SystemClock.uptimeMillis(); emulator = e; }
+    public static void attach(Emulator e) { attachedAt = SystemClock.uptimeMillis(); mainUiPaused = false; emulator = e; }
 
     /** The game ended (or its screen went away): no emulator until the next [attach]. */
     public static void detach(Emulator e) { if (emulator == e) emulator = null; }
@@ -168,6 +170,8 @@ public final class MainUIStateApi {
                 Log.i(TAG, "launch load: slot " + slot + " loaded");
             } catch (Throwable t) {
                 Log.w(TAG, "launch load of slot " + slot + " failed", t);
+            } finally {
+                keepPaused(e);
             }
         });
     }
@@ -175,21 +179,33 @@ public final class MainUIStateApi {
     /** Carries out a command broadcast (see the class comment) and answers it. */
     public static void handle(Context context, Intent intent) {
         final Context ctx = context.getApplicationContext();
-        final String command = intent.getStringExtra(EXTRA_COMMAND);
-        final int slot = intent.getIntExtra(EXTRA_SLOT, 0);
-        final String request = intent.getStringExtra(EXTRA_REQUEST);
-        final String replyTo = intent.getStringExtra(EXTRA_REPLY_TO);
-        final long waitMs = intent.getLongExtra(EXTRA_WAIT_MS, 15_000);
-        final long settleMs = intent.getLongExtra(EXTRA_SETTLE_MS, 300);
-        final long notBefore = intent.getLongExtra(EXTRA_NOT_BEFORE, 0);
+        final String command, request, replyTo;
+        final int slot;
+        final long waitMs, settleMs, notBefore;
+        try {
+            command = intent.getStringExtra(EXTRA_COMMAND);
+            slot = intent.getIntExtra(EXTRA_SLOT, 0);
+            request = intent.getStringExtra(EXTRA_REQUEST);
+            replyTo = intent.getStringExtra(EXTRA_REPLY_TO);
+            // (Bounded: one command can't keep the worker from every later one.)
+            waitMs = Math.min(intent.getLongExtra(EXTRA_WAIT_MS, 15_000), 180_000);
+            settleMs = Math.min(intent.getLongExtra(EXTRA_SETTLE_MS, 300), 10_000);
+            notBefore = intent.getLongExtra(EXTRA_NOT_BEFORE, 0);
+        } catch (RuntimeException bad) {
+            // Extras another app sent that can't be read: not a reason to crash the game.
+            Log.w(TAG, "unreadable command", bad);
+            return;
+        }
         if ("pause".equals(command) || "resume".equals(command)) {
             control.execute(() -> {
                 Intent r = result(command, slot, request);
                 try {
+                    if ("resume".equals(command)) mainUiPaused = false;
                     Emulator e = emulator;
                     if (e == null || !e.isRunning()) throw new IllegalStateException("no game is running");
                     if ("pause".equals(command)) {
-                        if (!e.pause()) throw new IllegalStateException("can't pause");
+                        mainUiPaused = true;
+                        if (!e.pause()) { mainUiPaused = false; throw new IllegalStateException("can't pause"); }
                     } else {
                         e.resume();
                     }
@@ -203,8 +219,8 @@ public final class MainUIStateApi {
         }
         worker.execute(() -> {
             Intent r = result(command, slot, request);
+            Emulator e = emulator;
             try {
-                Emulator e = emulator;
                 if ("status".equals(command)) {
                     status(r, e);
                     r.putExtra(EXTRA_OK, true);
@@ -224,8 +240,21 @@ public final class MainUIStateApi {
                 }
             } catch (Throwable t) {
                 fail(r, t);
+            } finally {
+                if (!"status".equals(command)) keepPaused(e);
             }
             answer(ctx, replyTo, r);
+        });
+    }
+
+    /**
+     * After a save or load: a MainUI pause that came while it ran is put back (adapters that pause
+     * for a save resume after it, which would let the game run under MainUI's menu).
+     */
+    private static void keepPaused(final Emulator e) {
+        if (e == null) return;
+        control.execute(() -> {
+            if (mainUiPaused && emulator == e) try { e.pause(); } catch (Throwable ignored) {}
         });
     }
 
