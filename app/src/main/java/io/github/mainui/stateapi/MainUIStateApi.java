@@ -230,12 +230,17 @@ public final class MainUIStateApi {
             Intent r = result(command, slot, request);
             Emulator e = emulator;
             Emulator lifted = null;
+            long liftedAt = 0;
             try {
                 if ("status".equals(command)) {
                     status(r, e);
                     r.putExtra(EXTRA_OK, true);
                 } else if ("save".equals(command) || "load".equals(command)) {
-                    if (e != null && !mainUiPaused && e.liftOwnPause()) lifted = e;
+                    // (Not for a launch's command: the game it is for has just started, with no pause of its own.)
+                    if (e != null && notBefore == 0 && !mainUiPaused) {
+                        long at = attachedAt;
+                        if (e.liftOwnPause()) { lifted = e; liftedAt = at; }
+                    }
                     if (!waitReady(waitMs, settleMs, notBefore)) throw new IllegalStateException(emulator == null ? "no game is running" : "the game wasn't ready");
                     e = emulator;
                     if (slot != RESUME_SLOT && (slot < 0 || slot >= e.slotCount())) throw new IllegalArgumentException("no slot " + slot);
@@ -252,7 +257,8 @@ public final class MainUIStateApi {
             } catch (Throwable t) {
                 fail(r, t);
             } finally {
-                if (lifted != null) try { lifted.restoreOwnPause(); } catch (Throwable ignored) {}
+                // Put back on the same game only.
+                if (lifted != null && emulator == lifted && attachedAt == liftedAt) try { lifted.restoreOwnPause(); } catch (Throwable ignored) {}
                 if (!"status".equals(command)) keepPaused(e);
             }
             answer(ctx, replyTo, r);
