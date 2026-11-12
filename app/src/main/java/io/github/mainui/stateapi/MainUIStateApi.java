@@ -100,8 +100,17 @@ public final class MainUIStateApi {
          */
         default boolean pause() { return false; }
 
-        /** Lets the game run again after {@link #pause}. */
+        /** Lets the game run again after {@link #pause} (only a pause {@link #pause} made). */
         default void resume() {}
+
+        /**
+         * The emulator's own pause (its menu, the user's pause) is held, not MainUI's: lifted for a
+         * save or load, which need the game running. True when lifted ({@link #restoreOwnPause} after).
+         */
+        default boolean liftOwnPause() { return false; }
+
+        /** Puts back the pause {@link #liftOwnPause} lifted. */
+        default void restoreOwnPause() {}
     }
 
     private static volatile Emulator emulator;
@@ -220,11 +229,13 @@ public final class MainUIStateApi {
         worker.execute(() -> {
             Intent r = result(command, slot, request);
             Emulator e = emulator;
+            Emulator lifted = null;
             try {
                 if ("status".equals(command)) {
                     status(r, e);
                     r.putExtra(EXTRA_OK, true);
                 } else if ("save".equals(command) || "load".equals(command)) {
+                    if (e != null && !mainUiPaused && e.liftOwnPause()) lifted = e;
                     if (!waitReady(waitMs, settleMs, notBefore)) throw new IllegalStateException(emulator == null ? "no game is running" : "the game wasn't ready");
                     e = emulator;
                     if (slot != RESUME_SLOT && (slot < 0 || slot >= e.slotCount())) throw new IllegalArgumentException("no slot " + slot);
@@ -241,6 +252,7 @@ public final class MainUIStateApi {
             } catch (Throwable t) {
                 fail(r, t);
             } finally {
+                if (lifted != null) try { lifted.restoreOwnPause(); } catch (Throwable ignored) {}
                 if (!"status".equals(command)) keepPaused(e);
             }
             answer(ctx, replyTo, r);

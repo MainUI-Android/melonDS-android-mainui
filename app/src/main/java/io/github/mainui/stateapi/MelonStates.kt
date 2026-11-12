@@ -62,6 +62,14 @@ class MelonStates(
         runBlocking { emulator.resumeEmulator() }
     }
 
+    override fun liftOwnPause(): Boolean {
+        if (pausedByMainUi || !paused || rom() == null) return false
+        runBlocking { emulator.resumeEmulator() }
+        return true
+    }
+
+    override fun restoreOwnPause() = runBlocking { emulator.pauseEmulator() }
+
     override fun save(slot: Int): String = runBlocking {
         val rom = rom() ?: throw IllegalStateException("no game is running")
         whilePaused {
